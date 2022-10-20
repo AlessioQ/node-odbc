@@ -31,7 +31,7 @@ using namespace node;
 
 Nan::Persistent<Function> ODBCStatement::constructor;
 
-void ODBCStatement::Init(v8::Handle<Object> exports) {
+void ODBCStatement::Init(v8::Local<Object> exports) {
   DEBUG_PRINTF("ODBCStatement::Init\n");
   Nan::HandleScope scope;
 
@@ -41,7 +41,7 @@ void ODBCStatement::Init(v8::Handle<Object> exports) {
   
   t->SetClassName(Nan::New("ODBCStatement").ToLocalChecked());
 
-  // Reserve space for one Handle<Value>
+  // Reserve space for one Local<Value>
   Local<ObjectTemplate> instance_template = t->InstanceTemplate();
   instance_template->SetInternalFieldCount(1);
   
@@ -64,8 +64,11 @@ void ODBCStatement::Init(v8::Handle<Object> exports) {
   Nan::SetPrototypeMethod(t, "closeSync", CloseSync);
 
   // Attach the Database Constructor to the target object
-  constructor.Reset(t->GetFunction());
-  exports->Set(Nan::New("ODBCStatement").ToLocalChecked(), t->GetFunction());
+  //constructor.Reset(t->GetFunction());
+  constructor.Reset(Nan::GetFunction(t).ToLocalChecked());
+   
+  //exports->Set(Nan::New("ODBCStatement").ToLocalChecked(), t->GetFunction());
+  Nan::Set(exports, Nan::New("ODBCStatement").ToLocalChecked(), Nan::GetFunction(t).ToLocalChecked());
 }
 
 ODBCStatement::~ODBCStatement() {
@@ -442,11 +445,11 @@ NAN_METHOD(ODBCStatement::ExecuteDirect) {
 #ifdef UNICODE
   data->sqlLen = sql->Length();
   data->sql = (uint16_t *) malloc((data->sqlLen * sizeof(uint16_t)) + sizeof(uint16_t));
-  sql->Write((uint16_t *) data->sql);
+  sql->Write(Isolate::GetCurrent(), (uint16_t *) data->sql);
 #else
   data->sqlLen = sql->Utf8Length();
   data->sql = (char *) malloc(data->sqlLen +1);
-  sql->WriteUtf8((char *) data->sql);
+  sql->WriteUtf8(Isolate::GetCurrent(), (char *) data->sql);
 #endif
 
   data->stmt = stmt;
@@ -594,11 +597,11 @@ NAN_METHOD(ODBCStatement::PrepareSync) {
 #ifdef UNICODE
   int sqlLen = sql->Length() + 1;
   uint16_t* sql2 = (uint16_t *) malloc(sqlLen * sizeof(uint16_t));
-  sql->Write(sql2);
+  sql->Write(Isolate::GetCurrent(), sql2);
 #else
   int sqlLen = sql->Utf8Length() + 1;
   char* sql2 = (char *) malloc(sqlLen);
-  sql->WriteUtf8(sql2);
+  sql->WriteUtf8(Isolate::GetCurrent(), sql2);
 #endif
   
   ret = SQLPrepare(
@@ -647,11 +650,11 @@ NAN_METHOD(ODBCStatement::Prepare) {
 #ifdef UNICODE
   data->sqlLen = sql->Length();
   data->sql = (uint16_t *) malloc((data->sqlLen * sizeof(uint16_t)) + sizeof(uint16_t));
-  sql->Write((uint16_t *) data->sql);
+  sql->Write(Isolate::GetCurrent(), (uint16_t *) data->sql);
 #else
   data->sqlLen = sql->Utf8Length();
   data->sql = (char *) malloc(data->sqlLen +1);
-  sql->WriteUtf8((char *) data->sql);
+  sql->WriteUtf8(Isolate::GetCurrent(), (char *) data->sql);
 #endif
   
   data->stmt = stmt;

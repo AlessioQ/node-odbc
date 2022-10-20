@@ -42,7 +42,7 @@ uv_mutex_t ODBC::g_odbcMutex;
 
 Nan::Persistent<Function> ODBC::constructor;
 
-void ODBC::Init(v8::Handle<Object> exports) {
+void ODBC::Init(v8::Local<Object> exports) {
   DEBUG_PRINTF("ODBC::Init\n");
   Nan::HandleScope scope;
 
@@ -51,7 +51,7 @@ void ODBC::Init(v8::Handle<Object> exports) {
   // Constructor Template
   constructor_template->SetClassName(Nan::New("ODBC").ToLocalChecked());
 
-  // Reserve space for one Handle<Value>
+  // Reserve space for one Local<Value>
   Local<ObjectTemplate> instance_template = constructor_template->InstanceTemplate();
   instance_template->SetInternalFieldCount(1);
   
@@ -76,9 +76,14 @@ void ODBC::Init(v8::Handle<Object> exports) {
   Nan::SetPrototypeMethod(constructor_template, "createConnectionSync", CreateConnectionSync);
 
   // Attach the Database Constructor to the target object
-  constructor.Reset(constructor_template->GetFunction());
-  exports->Set(Nan::New("ODBC").ToLocalChecked(),
-               constructor_template->GetFunction());
+  constructor.Reset(Nan::GetFunction(constructor_template).ToLocalChecked());
+  
+  Nan::Set(
+			exports,
+			Nan::New("ODBC").ToLocalChecked(),
+			Nan::GetFunction(constructor_template).ToLocalChecked()
+		);
+
   
   // Initialize the cross platform mutex provided by libuv
   uv_mutex_init(&ODBC::g_odbcMutex);
@@ -333,7 +338,7 @@ void ODBC::FreeColumns(Column* columns, short* colCount) {
  * GetColumnValue
  */
 
-Handle<Value> ODBC::GetColumnValue( SQLHSTMT hStmt, Column column, 
+Local<Value> ODBC::GetColumnValue( SQLHSTMT hStmt, Column column, 
                                         uint16_t* buffer, int bufferLength) {
   Nan::EscapableHandleScope scope;
   SQLLEN len = 0;
@@ -422,18 +427,32 @@ Handle<Value> ODBC::GetColumnValue( SQLHSTMT hStmt, Column column,
         //return Null();
       }
       else {
-        if (strptime((char *) buffer, "%Y-%m-%d %H:%M:%S", &timeInfo)) {
-          //a negative value means that mktime() should use timezone information
-          //and system databases to attempt to determine whether DST is in effect
-          //at the specified time.
-          timeInfo.tm_isdst = -1;
-          
-          //return scope.Escape(Date::New(Isolate::GetCurrent(), (double(mktime(&timeInfo)) * 1000));
-          return scope.Escape(Nan::New<Date>(double(mktime(&timeInfo)) * 1000).ToLocalChecked());
-        }
-        else {
-          return scope.Escape(Nan::New((char *)buffer).ToLocalChecked());
-        }
+         //AQ:ora è questo (win32DateTimeFix)
+        char dateStr[64] = "new Date('";
+        char *endStr = "')";
+        strcat(dateStr, (char *)buffer);
+        strcat(dateStr, endStr);
+        Handle<String> source = String::NewFromUtf8(Isolate::GetCurrent(), dateStr);
+        Handle<Script> script = Script::Compile(source);
+        Handle<Value> result = script->Run();	
+        return scope.Escape(result);
+        
+        
+          //AQ: era questo
+        /*
+        if (strptime((char *) buffer, "%Y-%m-%d %H:%M:%S", &timeInfo)) { 																	
+              //a negative value means that mktime() should use timezone information
+              //and system databases to attempt to determine whether DST is in effect
+              //at the specified time.
+              //timeInfo.tm_isdst = -1;
+              
+              //return scope.Escape(Date::New(Isolate::GetCurrent(), (double(mktime(&timeInfo)) * 1000));
+              //return scope.Escape(Nan::New<Date>(double(mktime(&timeInfo)) * 1000).ToLocalChecked());
+            }
+            else {
+              return scope.Escape(Nan::New((char *)buffer).ToLocalChecked());
+            }
+          */
       }
 #else
       struct tm timeInfo = { 
@@ -560,9 +579,9 @@ Handle<Value> ODBC::GetColumnValue( SQLHSTMT hStmt, Column column,
           else {
             //we need to concatenate
 #ifdef UNICODE
-            str = String::Concat(str, Nan::New((uint16_t*) buffer).ToLocalChecked());
+            str = String::Concat(Isolate::GetCurrent(), str, Nan::New((uint16_t*) buffer).ToLocalChecked());
 #else
-            str = String::Concat(str, Nan::New((char *) buffer).ToLocalChecked());
+            str = String::Concat(Isolate::GetCurrent(), str, Nan::New((char *) buffer).ToLocalChecked());
 #endif
           }
           
@@ -618,11 +637,18 @@ Local<Value> ODBC::GetRecordTuple ( SQLHSTMT hStmt, Column* columns,
         
   for(int i = 0; i < *colCount; i++) {
 #ifdef UNICODE
-    tuple->Set( Nan::New((uint16_t *) columns[i].name).ToLocalChecked(),
-                GetColumnValue( hStmt, columns[i], buffer, bufferLength));
+  Nan::Set(	tuple,
+			Nan::New((uint16_t *) columns[i].name).ToLocalChecked(),
+            GetColumnValue( hStmt, columns[i], buffer, bufferLength)
+		);
+			
+    //tuple->Set( Nan::New((uint16_t *) columns[i].name).ToLocalChecked(),
+    //            GetColumnValue( hStmt, columns[i], buffer, bufferLength));
 #else
-    tuple->Set( Nan::New((const char *) columns[i].name).ToLocalChecked(),
-                GetColumnValue( hStmt, columns[i], buffer, bufferLength));
+	Nan::Set(	tuple,
+				Nan::New((const char *) columns[i].name).ToLocalChecked(),
+                GetColumnValue( hStmt, columns[i], buffer, bufferLength)
+			);
 #endif
   }
   
@@ -641,8 +667,15 @@ Local<Value> ODBC::GetRecordArray ( SQLHSTMT hStmt, Column* columns,
   Local<Array> array = Nan::New<Array>();
         
   for(int i = 0; i < *colCount; i++) {
-    array->Set( Nan::New(i),
-                GetColumnValue( hStmt, columns[i], buffer, bufferLength));
+	
+	Nan::Set(	array,
+				Nan::New(i),
+                GetColumnValue( hStmt, columns[i], buffer, bufferLength)
+			);
+			
+	 
+    //array->Set( Nan::New(i),
+    //            GetColumnValue( hStmt, columns[i], buffer, bufferLength));
   }
   
   return scope.Escape(array);
@@ -663,7 +696,8 @@ Parameter* ODBC::GetParametersFromArray (Local<Array> values, int *paramCount) {
   }
   
   for (int i = 0; i < *paramCount; i++) {
-    Local<Value> value = values->Get(i);
+    //Local<Value> value = values->Get(i);
+	Local<Value> value = Nan::Get(values, i).ToLocalChecked();
     
     params[i].ColumnSize       = 0;
     params[i].StrLen_or_IndPtr = SQL_NULL_DATA;
@@ -674,7 +708,8 @@ Parameter* ODBC::GetParametersFromArray (Local<Array> values, int *paramCount) {
                  i, params[i].StrLen_or_IndPtr);
 
     if (value->IsString()) {
-      Local<String> string = value->ToString();
+      //Local<String> string = value->ToString();
+	    Local<String> string = value.As<v8::String>();
       
       params[i].ValueType         = SQL_C_TCHAR;
       params[i].ColumnSize        = 0; //SQL_SS_LENGTH_UNLIMITED 
@@ -689,9 +724,10 @@ Parameter* ODBC::GetParametersFromArray (Local<Array> values, int *paramCount) {
       params[i].StrLen_or_IndPtr  = SQL_NTS;//params[i].BufferLength;
 
 #ifdef UNICODE
-      string->Write((uint16_t *) params[i].ParameterValuePtr);
+      //string->Write((uint16_t *) params[i].ParameterValuePtr);
+	    string->Write(Isolate::GetCurrent(), (uint16_t *) params[i].ParameterValuePtr);
 #else
-      string->WriteUtf8((char *) params[i].ParameterValuePtr);
+      string->WriteUtf8(Isolate::GetCurrent(), (char *) params[i].ParameterValuePtr);
 #endif
 
       DEBUG_PRINTF("ODBC::GetParametersFromArray - IsString(): params[%i] c_type=%i type=%i buffer_length=%lli size=%lli length=%lli value=%s\n",
@@ -709,7 +745,8 @@ Parameter* ODBC::GetParametersFromArray (Local<Array> values, int *paramCount) {
                    params[i].BufferLength, params[i].ColumnSize, params[i].StrLen_or_IndPtr);
     }
     else if (value->IsInt32()) {
-      int64_t  *number = new int64_t(value->IntegerValue());
+      int64_t  *number = new int64_t(Nan::To<int64_t>(value).ToChecked());
+	  
       params[i].ValueType = SQL_C_SBIGINT;
       params[i].ParameterType   = SQL_BIGINT;
       params[i].ParameterValuePtr = number;
@@ -721,8 +758,8 @@ Parameter* ODBC::GetParametersFromArray (Local<Array> values, int *paramCount) {
                     *number);
     }
     else if (value->IsNumber()) {
-      double *number   = new double(value->NumberValue());
-      
+      double *number   = new double(Nan::To<double>(value).ToChecked());
+	
       params[i].ValueType         = SQL_C_DOUBLE;
       params[i].ParameterType     = SQL_DECIMAL;
       params[i].ParameterValuePtr = number;
@@ -737,7 +774,8 @@ Parameter* ODBC::GetParametersFromArray (Local<Array> values, int *paramCount) {
 		                *number);
     }
     else if (value->IsBoolean()) {
-      bool *boolean = new bool(value->BooleanValue());
+      bool *boolean = new bool(Nan::To<bool>(value).ToChecked());
+	
       params[i].ValueType         = SQL_C_BIT;
       params[i].ParameterType     = SQL_BIT;
       params[i].ParameterValuePtr = boolean;
@@ -756,7 +794,7 @@ Parameter* ODBC::GetParametersFromArray (Local<Array> values, int *paramCount) {
  * CallbackSQLError
  */
 
-Handle<Value> ODBC::CallbackSQLError (SQLSMALLINT handleType,
+Local<Value> ODBC::CallbackSQLError (SQLSMALLINT handleType,
                                       SQLHANDLE handle, 
                                       Nan::Callback* cb) {
   Nan::EscapableHandleScope scope;
@@ -829,7 +867,9 @@ Local<Object> ODBC::GetSQLError (SQLSMALLINT handleType, SQLHANDLE handle, char*
   DEBUG_PRINTF("ODBC::GetSQLError : called SQLGetDiagField; ret=%i, statusRecCount=%i\n", ret, statusRecCount);
 
   Local<Array> errors = Nan::New<Array>();
-  objError->Set(Nan::New("errors").ToLocalChecked(), errors);
+  //objError->Set(Nan::New("errors").ToLocalChecked(), errors);
+  Nan::Set(objError, Nan::New("errors").ToLocalChecked(), errors);
+  
   
   for (i = 0; i < statusRecCount; i++){
     DEBUG_PRINTF("ODBC::GetSQLError : calling SQLGetDiagRec; i=%i, statusRecCount=%i\n", i, statusRecCount);
@@ -851,28 +891,44 @@ Local<Object> ODBC::GetSQLError (SQLSMALLINT handleType, SQLHANDLE handle, char*
       
       if (i == 0) {
         // First error is assumed the primary error
-        objError->Set(Nan::New("error").ToLocalChecked(), Nan::New(message).ToLocalChecked());
+        //objError->Set(Nan::New("error").ToLocalChecked(), Nan::New(message).ToLocalChecked());
+		Nan::Set(objError, Nan::New("error").ToLocalChecked(), Nan::New(message).ToLocalChecked());
 #ifdef UNICODE
         Nan::SetPrototype(objError, Exception::Error(Nan::New((uint16_t *) errorMessage).ToLocalChecked()));
-        objError->Set(Nan::New("message").ToLocalChecked(), Nan::New((uint16_t *)errorMessage).ToLocalChecked());
-        objError->Set(Nan::New("state").ToLocalChecked(), Nan::New((uint16_t *)errorSQLState).ToLocalChecked());
+        
+		//objError->Set(Nan::New("message").ToLocalChecked(), Nan::New((uint16_t *)errorMessage).ToLocalChecked());
+		Nan::Set(objError, Nan::New("message").ToLocalChecked(), Nan::New((uint16_t *)errorMessage).ToLocalChecked());
+		
+        //objError->Set(Nan::New("state").ToLocalChecked(), Nan::New((uint16_t *)errorSQLState).ToLocalChecked());
+		Nan::Set(objError, Nan::New("state").ToLocalChecked(), Nan::New((uint16_t *)errorSQLState).ToLocalChecked());
 #else
         Nan::SetPrototype(objError, Exception::Error(Nan::New(errorMessage).ToLocalChecked()));
-        objError->Set(Nan::New("message").ToLocalChecked(), Nan::New(errorMessage).ToLocalChecked());
-        objError->Set(Nan::New("state").ToLocalChecked(), Nan::New(errorSQLState).ToLocalChecked());
+        
+		//objError->Set(Nan::New("message").ToLocalChecked(), Nan::New(errorMessage).ToLocalChecked());
+		Nan::Set(objError, Nan::New("message").ToLocalChecked(), Nan::New(errorMessage).ToLocalChecked());
+		
+        //objError->Set(Nan::New("state").ToLocalChecked(), Nan::New(errorSQLState).ToLocalChecked());
+		Nan::Set(objError, Nan::New("state").ToLocalChecked(), Nan::New(errorSQLState).ToLocalChecked());
 #endif
       }
 
       Local<Object> subError = Nan::New<Object>();
 
 #ifdef UNICODE
-      subError->Set(Nan::New("message").ToLocalChecked(), Nan::New((uint16_t *)errorMessage).ToLocalChecked());
-      subError->Set(Nan::New("state").ToLocalChecked(), Nan::New((uint16_t *)errorSQLState).ToLocalChecked());
+      //subError->Set(Nan::New("message").ToLocalChecked(), Nan::New((uint16_t *)errorMessage).ToLocalChecked());
+	  Nan::Set(subError, Nan::New("message").ToLocalChecked(), Nan::New((uint16_t *)errorMessage).ToLocalChecked());
+      
+	  //subError->Set(Nan::New("state").ToLocalChecked(), Nan::New((uint16_t *)errorSQLState).ToLocalChecked());
+	  Nan::Set(subError, Nan::New("state").ToLocalChecked(), Nan::New((uint16_t *)errorSQLState).ToLocalChecked());
 #else
-      subError->Set(Nan::New("message").ToLocalChecked(), Nan::New(errorMessage).ToLocalChecked());
-      subError->Set(Nan::New("state").ToLocalChecked(), Nan::New(errorSQLState).ToLocalChecked());
+      //subError->Set(Nan::New("message").ToLocalChecked(), Nan::New(errorMessage).ToLocalChecked());
+	  Nan::Set(subError, Nan::New("message").ToLocalChecked(), Nan::New(errorMessage).ToLocalChecked());
+  
+      //subError->Set(Nan::New("state").ToLocalChecked(), Nan::New(errorSQLState).ToLocalChecked());
+	  Nan::Set(subError, Nan::New("state").ToLocalChecked(), Nan::New(errorSQLState).ToLocalChecked());
 #endif
-      errors->Set(Nan::New(i), subError);
+      //errors->Set(Nan::New(i), subError);
+	  Nan::Set(errors, Nan::New(i), subError);
 
     } else if (ret == SQL_NO_DATA) {
       break;
@@ -881,10 +937,15 @@ Local<Object> ODBC::GetSQLError (SQLSMALLINT handleType, SQLHANDLE handle, char*
 
   if (statusRecCount == 0) {
     //Create a default error object if there were no diag records
-    objError->Set(Nan::New("error").ToLocalChecked(), Nan::New(message).ToLocalChecked());
+    //objError->Set(Nan::New("error").ToLocalChecked(), Nan::New(message).ToLocalChecked());
+	Nan::Set(objError, Nan::New("error").ToLocalChecked(), Nan::New(message).ToLocalChecked());
+	
     Nan::SetPrototype(objError, Exception::Error(Nan::New(message).ToLocalChecked()));
-    objError->Set(Nan::New("message").ToLocalChecked(), Nan::New(
-      (const char *) "[node-odbc] An error occurred but no diagnostic information was available.").ToLocalChecked());
+    
+	//objError->Set(Nan::New("message").ToLocalChecked(), Nan::New(
+    //  (const char *) "[node-odbc] An error occurred but no diagnostic information was available.").ToLocalChecked());
+	Nan::Set(objError, Nan::New("message").ToLocalChecked(), Nan::New(
+	  (const char *) "[node-odbc] An error occurred but no diagnostic information was available.").ToLocalChecked());
   }
 
   return scope.Escape(objError);
@@ -939,9 +1000,9 @@ Local<Array> ODBC::GetAllRecordsSync (HENV hENV,
       
       break;
     }
-
-    rows->Set(
-      Nan::New(count), 
+	
+	Nan::Set(rows, 
+	  Nan::New(count), 
       ODBC::GetRecordTuple(
         hSTMT,
         columns,
@@ -969,9 +1030,11 @@ NAN_METHOD(ODBC::LoadODBCLibrary) {
 }
 #endif
 
-extern "C" void init(v8::Handle<Object> exports) {
+extern "C" void init(v8::Local<Object> exports) {
 #ifdef dynodbc
-  exports->Set(Nan::New("loadODBCLibrary").ToLocalChecked(),
+  //exports->Set(Nan::New("loadODBCLibrary").ToLocalChecked(),
+  //      Nan::New<FunctionTemplate>(ODBC::LoadODBCLibrary)->GetFunction());
+  Nan::Set(exports, Nan::New("loadODBCLibrary").ToLocalChecked(),
         Nan::New<FunctionTemplate>(ODBC::LoadODBCLibrary)->GetFunction());
 #endif
   
